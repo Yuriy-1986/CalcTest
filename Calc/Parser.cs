@@ -1,131 +1,129 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace CalcTest
 {
-  public class Parser
+  public class Parser : IParser
   {
-    public Parser(Tokenizer tokenizer)
+    Dictionary<int, List<Operator>> _operationsByPriority = new Dictionary<int, List<Operator>>();
+    HashSet<string> _tokens = new HashSet<string>();
+    SortedSet<int> _priorities = new SortedSet<int>();
+    List<int> _prioritiesList;
+    ITokenizer _tokenizer;
+
+    public static Parser BasicOperatorsParser
     {
-      _tokenizer = tokenizer;
+      get
+      {
+        Parser basicParser = new Parser();
+        Operator unaryMinus = new OperatorUnary("-", OperatorPriority.High, (a) => -a);
+        Operator unaryPlus = new OperatorUnary("+", OperatorPriority.High, (a) => a);
+        Operator add = new OperatorBinary("+", OperatorPriority.Lowest, Associativity.LEFT, (a, b) => (a + b));
+        Operator subtract = new OperatorBinary("-", OperatorPriority.Lowest, Associativity.LEFT, (a, b) => (a - b));
+        Operator multiply = new OperatorBinary("*", OperatorPriority.Low, Associativity.LEFT, (a, b) => (a * b));
+        Operator divide = new OperatorBinary("/", OperatorPriority.Low, Associativity.LEFT, (a, b) => (a / b));
+        Operator power = new OperatorBinary("^", OperatorPriority.Medium, Associativity.RIGHT, (a, b) => Math.Pow(a, b));
+
+        basicParser.AddOperator(unaryMinus);
+        basicParser.AddOperator(unaryPlus);
+        basicParser.AddOperator(add);
+        basicParser.AddOperator(subtract);
+        basicParser.AddOperator(multiply);
+        basicParser.AddOperator(divide);
+        basicParser.AddOperator(power);
+
+        return basicParser;
+      }
     }
 
-    Tokenizer _tokenizer;
-
-    public Node ParseExpression()
+    public Parser()
     {
-      Node expr = ParseAddSubtract();
+      _priorities.Add(OperatorPriority.Highest); //parens and numbers priority
+    }
 
-      if (_tokenizer.Token != Token.EOF) throw new SyntaxException("Unexpected characters at the end of expression");
+    public void AddOperator(Operator op)
+    {
+      if (!_operationsByPriority.ContainsKey(op.Priority))
+      {
+        if (!_priorities.Contains(op.Priority)) _priorities.Add(op.Priority);
+        _operationsByPriority.Add(op.Priority, new List<Operator>());
+      }
+
+      _operationsByPriority[op.Priority].Add(op);
+      if (!_tokens.Contains(op.TokenString)) _tokens.Add(op.TokenString);
+    }
+
+    public Node ParseExpression(string exprString)
+    {
+      _tokenizer = new Tokenizer(new StringReader(exprString), _tokens);
+      _prioritiesList = _priorities.ToList();
+
+      Node expr = ParseByPriority(_priorities.Min);
+      if (_tokenizer.TokenType != TokenType.EOF) throw new SyntaxException("Unexpected characters at the end of expression");
       return expr;
     }
 
-    Node ParseAddSubtract()
+    Node ParseByPriority(int priority)
     {
-      Node lhs = ParseMultiplyDivide();
-
-      while (true)
+      if (priority == OperatorPriority.Highest)
       {
-        Func<double, double, double> op = null;
-        if (_tokenizer.Token == Token.Add)
-        {
-          op = (a, b) => a + b;
-        }
-        else if (_tokenizer.Token == Token.Subtract)
-        {
-          op = (a, b) => a - b;
-        }
-
-        if (op == null) return lhs;
-
-        _tokenizer.NextToken();
-
-        Node rhs = ParseMultiplyDivide();
-
-        lhs = new NodeBinary(lhs, rhs, op);
+        return ParseLeaf();
       }
-    }
-
-    Node ParseMultiplyDivide()
-    {
-      Node lhs = ParseUnary();
-
-      while (true)
+      else
       {
-        Func<double, double, double> op = null;
-        if (_tokenizer.Token == Token.Multiply)
+        int nextPriority = _prioritiesList[_prioritiesList.IndexOf(priority) + 1];
+        List<Operator> operators = _operationsByPriority[priority];
+        IEnumerable<OperatorUnary> unaryOps = operators.Where((op) => (op is OperatorUnary)).Cast<OperatorUnary>();
+        IEnumerable<OperatorBinary> binaryOps = operators.Where((op) => (op is OperatorBinary)).Cast<OperatorBinary>();
+
+        //unary operators
+        foreach (var op in unaryOps)
         {
-          op = (a, b) => a * b;
-        }
-        else if (_tokenizer.Token == Token.Divide)
-        {
-          op = (a, b) => a / b;
+          if (op.TokenString == _tokenizer.Token)
+          {
+            _tokenizer.NextToken();
+            Node rhs = ParseByPriority(priority);
+            return new NodeUnary(rhs, op.Op);
+          }
         }
 
-        if (op == null) return lhs;
-
-        _tokenizer.NextToken();
-
-        Node rhs = ParseUnary();
-
-        lhs = new NodeBinary(lhs, rhs, op);
+        //binary operators
+        Node lhs = ParseByPriority(nextPriority);
+        while (true)
+        {
+          OperatorBinary op = binaryOps.FirstOrDefault(op => op.TokenString == _tokenizer.Token);
+          if (op == null) return lhs;
+          _tokenizer.NextToken();
+          Node rhs = ((op.Associativity == Associativity.LEFT) ? ParseByPriority(nextPriority) : ParseByPriority(priority));
+          lhs = new NodeBinary(lhs, rhs, op.Op);
+        }
       }
-    }
-
-    Node ParseUnary()
-    {
-      if (_tokenizer.Token == Token.Add)
-      {
-        _tokenizer.NextToken();
-        return ParseUnary();
-      }
-
-      if (_tokenizer.Token == Token.Subtract)
-      {
-        _tokenizer.NextToken();
-        Node rhs = ParseUnary();
-
-        return new NodeUnary(rhs, (a) => -a);
-      }
-
-      return ParseLeaf();
     }
 
     Node ParseLeaf()
     {
-      if (_tokenizer.Token == Token.Number)
+      if (_tokenizer.TokenType == TokenType.Number)
       {
         NodeNumber node = new NodeNumber(_tokenizer.Number);
         _tokenizer.NextToken();
         return node;
       }
 
-      if (_tokenizer.Token == Token.OpenParens)
+      if (_tokenizer.TokenType == TokenType.OpenParens)
       {
         _tokenizer.NextToken();
 
-        Node node = ParseAddSubtract();
+        Node node = ParseByPriority(_priorities.Min);
 
-        if (_tokenizer.Token != Token.CloseParens) throw new SyntaxException("Missing close parenthesis");
+        if (_tokenizer.TokenType != TokenType.CloseParens) throw new SyntaxException("Missing close parenthesis");
         _tokenizer.NextToken();
 
         return node;
       }
 
-      throw new SyntaxException($"Unexpected token: {_tokenizer.Token}");
+      throw new SyntaxException($"Unexpected token: {_tokenizer.TokenType}");
     }
-
-    #region Helpers
-    public static Node Parse(string str)
-    {
-      return Parse(new Tokenizer(new StringReader(str)));
-    }
-
-    public static Node Parse(Tokenizer tokenizer)
-    {
-      Parser parser = new Parser(tokenizer);
-      return parser.ParseExpression();
-    }
-    #endregion
   }
 }

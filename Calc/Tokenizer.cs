@@ -1,31 +1,32 @@
-﻿using System.Globalization;
+﻿using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace CalcTest
 {
-  public class Tokenizer
+  public class Tokenizer : ITokenizer
   {
     TextReader _reader;
     char _currentChar;
-    Token _currentToken;
+    string _currentToken;
+    TokenType _currentTokenType;
     double _number;
+    HashSet<string> _tokens;
 
-    public Tokenizer(TextReader reader)
+    public string Token { get { return _currentToken; } }
+
+    public TokenType TokenType { get { return _currentTokenType; } }
+
+    public double Number { get { return _number; } }
+
+    public Tokenizer(TextReader reader, HashSet<string> tokens)
     {
       _reader = reader;
+      _tokens = tokens;
       NextChar();
       NextToken();
-    }
-
-    public Token Token
-    {
-      get { return _currentToken; }
-    }
-
-    public double Number
-    {
-      get { return _number; }
     }
 
     void NextChar()
@@ -44,37 +45,17 @@ namespace CalcTest
       switch (_currentChar)
       {
         case '\0':
-          _currentToken = Token.EOF;
+          _currentTokenType = TokenType.EOF;
           return;
-
-        case '+':
-          NextChar();
-          _currentToken = Token.Add;
-          return;
-
-        case '-':
-          NextChar();
-          _currentToken = Token.Subtract;
-          return;
-        
-        case '*':
-          NextChar();
-          _currentToken = Token.Multiply;
-          return;
-
-        case '/':
-          NextChar();
-          _currentToken = Token.Divide;
-          return;
-
         case '(':
           NextChar();
-          _currentToken = Token.OpenParens;
+          _currentToken = "(";
+          _currentTokenType = TokenType.OpenParens;
           return;
-
         case ')':
           NextChar();
-          _currentToken = Token.CloseParens;
+          _currentToken = ")";
+          _currentTokenType = TokenType.CloseParens;
           return;
       }
 
@@ -88,10 +69,30 @@ namespace CalcTest
           haveDecimalPoint = _currentChar == '.';
           NextChar();
         }
-
+        _currentToken = sb.ToString();
         _number = double.Parse(sb.ToString(), CultureInfo.InvariantCulture);
-        _currentToken = Token.Number;
+        _currentTokenType = TokenType.Number;
         return;
+      }
+
+      //this tokenizer implementation selects shortest token found, not a greedy one
+      if (_tokens.Any(s => s.StartsWith(_currentChar)))
+      {
+        string possibleToken = "";
+        bool tokenFound = false;
+        do
+        {
+          possibleToken += _currentChar;
+          NextChar();
+          if (_tokens.Any(s => s.Equals(possibleToken))) tokenFound = true;
+        } while (!tokenFound && char.IsWhiteSpace(_currentChar));
+        
+        if (tokenFound)
+        {
+          _currentToken = possibleToken;
+          _currentTokenType = TokenType.Operator;
+          return;
+        }
       }
 
       throw new InvalidDataException($"Unexpected character: {_currentChar}");
